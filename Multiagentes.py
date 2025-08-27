@@ -193,7 +193,7 @@ class TrafficModel(ap.Model):
         self.positions = [] #lista por paso de las posiciones de los autos
         self.removed_count = 0 #autos que ya salieron del grid
 
-    #Spawn de los bordes segun los carriles
+    #Spawn de los carros segun los carriles
     def spawn_vehicles(self):
         half = self.size // 2
 
