@@ -24,7 +24,7 @@ class VehicleAgent(ap.Agent):
         return None
     
     def propose_move(self):
-        "Devuelve (nx, ny, new_vel, can_advance_flag)"
+        "Devuelve (newX, newY, new_vel, can_advance_flag)"
         #Posicion actual
         pos = self.city.positions[self]
         if pos is None:
@@ -58,24 +58,24 @@ class VehicleAgent(ap.Agent):
             if x not in allowed:
                 # ajusta x a la columna de carril más cercana del conjunto permitido
                 x = min(allowed, key=lambda c: abs(c - x))
-                nx = x  # posición corregida en x
+                newX = x  # posición corregida en x
             # prohibir camellón central
             if x == half:
                 x = half + (1 if vy > 0 else -1)
             # destino recto
-            nx, ny = x, y + vy
+            newX, newY = x, y + vy
 
         elif vy == 0 and abs(vx) == 1:    # EO
             # Si va a la derecha, debe estar en eo_right_rows; si a la izquierda, en eo_left_rows
             allowed = self.model.eo_right_rows if vx > 0 else self.model.eo_left_rows
             if y not in allowed:
                 y = min(allowed, key=lambda r: abs(r - y))
-                ny = y  # posición corregida en y
+                newY = y  # posición corregida en y
             # prohibir camellón central
             if y == half:
                 y = half + (1 if vx > 0 else -1)
             # destino recto
-            nx, ny = x + vx, y
+            newX, newY = x + vx, y
         
         new_v = np.array([vx, vy], dtype=int)
 
@@ -87,12 +87,12 @@ class VehicleAgent(ap.Agent):
                              (axis == 'EO' and self.model.current_cycle == 1))
         
         new_v = np.array([vx, vy], dtype=int)
-        nx, ny = x, y
+        newX, newY = x, y
 
         #ver si se encuentra en una celda de giro
         will_turn = False
         half = self.model.half
-        tc = self.city.turn_cells  # alias corto
+        turnCells = self.city.turn_cells  # alias corto
 
         #Esta en alguna de las 4 celdas de giro?
         at_ns_up_right   = (int(x) == tc["NS_up_right"][0]   and int(y) == tc["NS_up_right"][1]   and vy == 1)
@@ -106,31 +106,31 @@ class VehicleAgent(ap.Agent):
                 if at_ns_up_right:
                     #gira a ESTE
                     new_v = np.array([1, 0], dtype=int)
-                    nx, ny = x + 1, y
+                    newX, newY = x + 1, y
                 elif at_ns_down_right:
                     #gira a OESTE
                     new_v = np.array([-1, 0], dtype=int)
-                    nx, ny = x - 1, y
+                    newX, newY = x - 1, y
                 elif at_eo_right_down:
                     #gira a SUR
                     new_v = np.array([0, -1], dtype=int)
-                    nx, ny = x, y - 1
+                    newX, newY = x, y - 1
                 elif at_eo_left_up:
                     #gira a NORTE
                     new_v = np.array([0, 1], dtype=int)
-                    nx, ny = x, y + 1
+                    newX, newY = x, y + 1
                 will_turn = True
 
         #se permite el movimiento si el su eje tiene el semaforo en verde o si gira y esta permitido
         if can_move_straight or will_turn:
             if will_turn:
-                nx, ny = int(nx), int(ny)
+                newX, newY = int(newX), int(newY)
             else:
-                nx = int(x+int(new_v[0]))
-                ny = int(y+int(new_v[1]))
+                newX = int(x+int(new_v[0]))
+                newY = int(y+int(new_v[1]))
         else:
-            nx, ny = int(x), int(y)
-        return (nx, ny, new_v, (can_move_straight or will_turn))
+            newX, newY = int(x), int(y)
+        return (newX, newY, new_v, (can_move_straight or will_turn))
             
 
 
@@ -257,17 +257,17 @@ class TrafficModel(ap.Model):
             pm = car.propose_move()
             if not isinstance(pm, tuple) or len(pm) != 4:
                 #si sucede algo raro no se propone movimiento
-                nx, ny, new_vel, wants_to_move = (self.city.positions[car][0],
+                newX, newY, new_vel, wants_to_move = (self.city.positions[car][0],
                                                   self.city.positions[car][1],
                                                   getattr(car, "velocity", np.array([0, 0], dtype=int)),
                                                   False)
             else:
-                nx, ny, new_vel, wants_to_move = pm
+                newX, newY, new_vel, wants_to_move = pm
             
-            nx, ny = int(nx), int(ny)
+            newX, newY = int(newX), int(newY)
 
             #si su destino queda fuera del grid se elimina
-            if nx <= 0 or nx >= self.size - 1 or ny <= 0 or ny >= self.size - 1:
+            if newX <= 0 or newX >= self.size - 1 or newY <= 0 or newY >= self.size - 1:
                 #si ya esta en el borde se elimina
                 if (x <= 0 or x >= self.size - 1 or y <= 0 or y >= self.size -1):
                     to_remove.append(car)
@@ -275,11 +275,11 @@ class TrafficModel(ap.Model):
                 pass
 
             #registrar la propuesta
-            key = (nx, ny)
+            key = (newX, newY)
             proposals.setdefault(key, []).append((car, new_vel, wants_to_move))
 
             #si en la propuesta el auto se queda, lo marcamos como stayer
-            if (nx, ny) == (x, y):
+            if (newX, newY) == (x, y):
                 stayer.add(car)
         
         #Resolver conflictos por cada celda destino
@@ -322,9 +322,9 @@ class TrafficModel(ap.Model):
 
         #Aplicar movimientos y contabilizar tiempos de espera
         moved = set()
-        for car, (nx, ny, new_vel) in winners.items():
+        for car, (newX, newY, new_vel) in winners.items():
             x, y = self.city.positions[car]
-            dx, dy = int(nx - x), int(ny - y)
+            dx, dy = int(newX - x), int(newY - y)
             if dx != 0 or dy != 0:
                 #mover y actualizar su velocidad
                 self.city.move_by(car, np.array([dx, dy], dtype=int))
