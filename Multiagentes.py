@@ -168,7 +168,7 @@ class TrafficModel(ap.Model):
         self.spawn_prob = float(self.p.spawn_prob) #Probabilidad de que aparezca un auto en cada carril
         self.cycle_length = int(self.p.cycle_length) #Duracion del ciclo del semaforo
         self.turn_prob = float(self.p.turn_prob) #Probabilidad de que un auto gire en la interseccion
-        
+        self.conn = None
         #4 carriles por lado (2 por sentido)
         self.half = self.size // 2
         
@@ -376,13 +376,17 @@ class TrafficModel(ap.Model):
                     to_remove_extra.append(car)
             
         if to_remove_extra:
-            self.city.remove_agents(to_remove_extra)
-            self.removed_count += len(to_remove_extra)
+            valid_remove = [car for car in to_remove_extra if car in self.city.positions]
+            if valid_remove:
+                self.city.remove_agents(valid_remove)
+                self.removed_count += len(valid_remove)
             
         #eliminar los autos que salieron del grid
         if to_remove:
-            self.city.remove_agents(to_remove)
-            self.removed_count += len(to_remove)
+            valid_remove = [car for car in to_remove if car in self.city.positions]
+            if valid_remove:
+                self.city.remove_agents(valid_remove)
+                self.removed_count += len(valid_remove)
         
         #actualizar el entorno
         #self.city.update()
@@ -394,7 +398,44 @@ class TrafficModel(ap.Model):
             axis = car.axis()
             snap.append((int(x), int(y), 0 if axis == 'NS' else 1))
         self.positions.append(snap)
+        
+        if self.conn:
+            data = {
+                "frame": self.t,
+                "cars": [{"x": int(x), "y": int(y), "axis": int(eje)} for (x, y, eje) in snap]
+            }
+            message = json.dumps(data) + "\n"
+            try:
+                self.conn.sendall(message.encode("utf-8"))
+                print("Enviando a Unity: ", message)
+            except Exception as e:
+                print("Error enviando a unity")
+                self.stop()
 
+#Servidor para poder mandar los datos a unity utilizando socket
+
+import socket
+import json
+import time
+
+def run_server_live(model, host="127.0.0.1", port=5050, delay=0.2):
+    #creacion del socket TCP
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((host, port))
+    server_socket.listen(1)
+
+    print(f"Esperando conexion en unity")
+    conn, addr = server_socket.accept()
+    print(f"Conectando con {addr}")
+
+    try:
+        model.conn = conn
+        model.run()
+    except Exception as e:
+        print(f"Error en simulacion: {e}")
+    finally:
+        conn.close()
+        server_socket.close()
 
 #parametros del modelo 
 parameters = {
@@ -408,7 +449,7 @@ parameters = {
 }
 
 model = TrafficModel(parameters)
-results = model.run()
+run_server_live(model)
 
 if not hasattr(model, "positions") or len(model.positions) == 0:
     raise RuntimeError("No hay frames en model.positions. Asegúrate de llenar model.positions en cada step().")
