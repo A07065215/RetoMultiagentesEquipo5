@@ -131,24 +131,26 @@ class TrafficModel(ap.Model):
     def update_lights(self):
 
         self.cycle_timer += 1
+        phase_duration = self.cycle_length
+        yellow_duration = max(2, self.cycle_length // 3)
 
         if self.current_phase == 'NS_GREEN':
-            if self.cycle_timer >= self.cycle_length:
+            if self.cycle_timer >= phase_duration:
                 self.current_phase = 'NS_YELLOW'
                 self.cycle_timer = 0
 
         elif self.current_phase == 'NS_YELLOW':
-            if self.cycle_timer >= self.yellow_length:   # duración corta para amarillo
+            if self.cycle_timer >= yellow_duration:   # duración corta para amarillo
                 self.current_phase = 'EW_GREEN'
                 self.cycle_timer = 0
 
         elif self.current_phase == 'EW_GREEN':
-            if self.cycle_timer >= self.cycle_length:
+            if self.cycle_timer >= phase_duration:
                 self.current_phase = 'EW_YELLOW'
                 self.cycle_timer = 0
 
         elif self.current_phase == 'EW_YELLOW':
-            if self.cycle_timer >= self.yellow_length:
+            if self.cycle_timer >= yellow_duration:
                 self.current_phase = 'NS_GREEN'
                 self.cycle_timer = 0
                 
@@ -178,10 +180,21 @@ class TrafficModel(ap.Model):
 
         winners = {}
         for cell, lst in proposals.items():
-            movers = [c for c in lst if c[2]]
-            if movers:
-                car_win, v_win, _ = random.choice(movers)
-                winners[car_win] = (cell[0], cell[1], v_win)
+            # Si ya hay alguien en esa celda (ocupied), no se permite que entren
+            if cell in occupied:
+                # Solo el que ya estaba puede quedarse
+                for (car, new_vel, wants) in lst:
+                    x, y = self.city.positions[car]
+                    if (x, y) == cell:   # mismo lugar que antes
+                        winners[car] = (cell[0], cell[1], new_vel)
+            continue
+
+    # Si la celda está libre, elegir ganador entre los que quieren moverse
+        movers = [(car, new_vel) for (car, new_vel, wants) in lst if wants]
+        if movers:
+            car_win, v_win = random.choice(movers)
+            winners[car_win] = (cell[0], cell[1], v_win)
+
 
         moved = set()
         for car, (nx, ny, new_vel) in winners.items():
