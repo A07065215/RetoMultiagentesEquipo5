@@ -4,6 +4,7 @@ import json
 import time
 import random
 import numpy as np
+import matplotlib.pyplot as plt
 
 # -----------------------------
 # Agente Auto
@@ -39,8 +40,7 @@ class VehicleAgent(ap.Agent):
 
         # ¿Semáforo permite avanzar recto?
         axis = self.axis()
-        can_move = ((axis == 'NS' and self.model.current_phase == 'NS_GREEN') or
-                    (axis == 'EW' and self.model.current_phase == 'EW_GREEN'))
+        can_move = (self.lane == self.model.current_phase[0])
 
         # ¿Está en celda de giro?
         will_turn = False
@@ -83,6 +83,16 @@ class TrafficModel(ap.Model):
         self.turn_prob = self.p.turn_prob
         self.cycle_length = self.p.cycle_length
         self.half = self.size // 2
+        self.yellow_length = self.p.get("yellow_length", 2)
+        self.current_phase = 'N_GREEN'
+
+        self.metrics = {
+            "step": [],
+            "cars_in_system": [],
+            "cars_removed": [],
+            "avg_wait_time": [],
+            "total_wait_time": []
+        }
 
         self.city = City(self, shape=(self.size, self.size))
 
@@ -119,19 +129,29 @@ class TrafficModel(ap.Model):
         new_car.pos = 0
 
     def update_lights(self):
+
         self.cycle_timer += 1
-        
-        ns_waiting = sum(1 for car in self.city.agents if car.axis() == 'NS')
-        ew_waiting = sum(1 for car in self.city.agents if car.axis() == 'EW')
-        
+
         if self.current_phase == 'NS_GREEN':
-            if self.cycle_timer >= self.cycle_length and ew_waiting > ns_waiting:
+            if self.cycle_timer >= self.cycle_length:
+                self.current_phase = 'NS_YELLOW'
+                self.cycle_timer = 0
+
+        elif self.current_phase == 'NS_YELLOW':
+            if self.cycle_timer >= self.yellow_length:   # duración corta para amarillo
                 self.current_phase = 'EW_GREEN'
-            self.cycle_timer = 0
-        else:
-            if self.cycle_timer >= self.cycle_length and ns_waiting > ew_waiting:
+                self.cycle_timer = 0
+
+        elif self.current_phase == 'EW_GREEN':
+            if self.cycle_timer >= self.cycle_length:
+                self.current_phase = 'EW_YELLOW'
+                self.cycle_timer = 0
+
+        elif self.current_phase == 'EW_YELLOW':
+            if self.cycle_timer >= self.yellow_length:
                 self.current_phase = 'NS_GREEN'
                 self.cycle_timer = 0
+                
 
     def step(self):
         # Actualizar semáforo
@@ -180,29 +200,51 @@ class TrafficModel(ap.Model):
             self.city.remove_agents(to_remove)
             self.removed_count += len(to_remove)
 
+        #registro de las metricas
+        removed_cars = len(to_remove)
+        total_wait = sum(car.wait_time for car in self.city.agents)
+        avg_wait = total_wait / len(self.city.agents) if self.city.agents else 0
+
+        self.metrics["step"].append(self.t)
+        self.metrics["cars_in_system"].append(len(self.city.agents))
+        self.metrics["cars_removed"].append(removed_cars)
+        self.metrics["avg_wait_time"].append(avg_wait)
+        self.metrics["total_wait_time"].append(total_wait)
+
+        self.t += 1
+
     def get_state(self):
         lights = {"N":"RED","S":"RED","E":"RED","W":"RED"}
+
         if self.current_phase == 'NS_GREEN':
             lights["N"] = lights["S"] = "GREEN"
-        else:
+        elif self.current_phase == 'NS_YELLOW':
+            lights["N"] = lights["S"] = "YELLOW"
+        elif self.current_phase == 'EW_GREEN':
             lights["E"] = lights["W"] = "GREEN"
+        elif self.current_phase == 'EW_YELLOW':
+            lights["E"] = lights["W"] = "YELLOW"
 
         cars_data = []
         for i, car in enumerate(self.city.agents):
+            x, y = self.city.positions[car]
             cars_data.append({
                 "id": i,
                 "lane": car.lane,
                 "pos": car.pos,
-                "wait": car.wait_time
+                "wait": car.wait_time,
+                "x": int(x),
+                "y": int(y)
             })
 
         return {"lights": lights, "cars": cars_data}
+        
 
 # -----------------------------
 # Servidor TCP
 # -----------------------------
 def run_server():
-    params = {"steps": 50, "size": 21, "spawn_prob": 0.3, "cycle_length": 8, "turn_prob": 0.3}
+    params = {"steps": 80, "size": 21, "spawn_prob": 0.3, "cycle_length": 5, "yellow_length": 2, "turn_prob": 0.3}
     model = TrafficModel(params)
     model.setup()
 
@@ -220,9 +262,34 @@ def run_server():
         msg = json.dumps(data) + "\n"
         conn.sendall(msg.encode("utf-8"))
         print("Enviado:", msg.strip())
-        time.sleep(1)
+        time.sleep(0.5)
 
     conn.close()
+    return model
 
 if __name__ == "__main__":
-    run_server()
+    model = run_server()
+
+#grafica de las metricas despues de la simulacion
+plt.figure(figsize=(12, 8))
+
+plt.subplot(2,2,1)
+plt.plot(model.metrics["step"], model.metrics["cars_in_system"], label="Autos en sistema")
+plt.xlabel("Step")
+plt.ylabel("Cantidad de autos")
+plt.legend()
+
+plt.subplot(2,2,3)
+plt.plot(model.metrics["step"], model.metrics["avg_wait_time"], label="Tiempo de espera promedio", color='green')
+plt.xlabel("Step")
+plt.ylabel("Tiempo de espera")
+plt.legend()
+
+plt.subplot(2,2,4)
+plt.plot(model.metrics["step"], model.metrics["total_wait_time"], label="Tiempo de espera total", color='red')
+plt.xlabel("Step")
+plt.ylabel("Tiempo de espera")
+plt.legend()
+
+plt.tight_layout()
+plt.show()
