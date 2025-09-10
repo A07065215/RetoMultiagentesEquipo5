@@ -187,13 +187,13 @@ class TrafficModel(ap.Model):
                     x, y = self.city.positions[car]
                     if (x, y) == cell:   # mismo lugar que antes
                         winners[car] = (cell[0], cell[1], new_vel)
-            continue
+                continue
 
     # Si la celda está libre, elegir ganador entre los que quieren moverse
-        movers = [(car, new_vel) for (car, new_vel, wants) in lst if wants]
-        if movers:
-            car_win, v_win = random.choice(movers)
-            winners[car_win] = (cell[0], cell[1], v_win)
+            movers = [(car, new_vel) for (car, new_vel, wants) in lst if wants]
+            if movers:
+                car_win, v_win = random.choice(movers)
+                winners[car_win] = (cell[0], cell[1], v_win)
 
 
         moved = set()
