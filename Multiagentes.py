@@ -120,12 +120,16 @@ class TrafficModel(ap.Model):
 
     def update_lights(self):
         self.cycle_timer += 1
+        
+        ns_waiting = sum(1 for car in self.city.agents if car.axis() == 'NS')
+        ew_waiting = sum(1 for car in self.city.agents if car.axis() == 'EW')
+        
         if self.current_phase == 'NS_GREEN':
-            if self.cycle_timer >= self.cycle_length:
+            if self.cycle_timer >= self.cycle_length and ew_waiting > ns_waiting:
                 self.current_phase = 'EW_GREEN'
-                self.cycle_timer = 0
+            self.cycle_timer = 0
         else:
-            if self.cycle_timer >= self.cycle_length:
+            if self.cycle_timer >= self.cycle_length and ns_waiting > ew_waiting:
                 self.current_phase = 'NS_GREEN'
                 self.cycle_timer = 0
 
