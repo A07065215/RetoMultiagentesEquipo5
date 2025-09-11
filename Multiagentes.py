@@ -26,7 +26,7 @@ class VehicleAgent(ap.Agent):
             return 'EW'
         return None
 
-    def propose_move(self):
+    def propose_move(self, occupied):
         x, y = self.model.city.positions[self]
         vx, vy = self.velocity
 
@@ -37,10 +37,18 @@ class VehicleAgent(ap.Agent):
 
         # Posición siguiente
         nx, ny = x + vx, y + vy
+        next_pos = (nx, ny)
+
+        # 🚫 Bloqueo si ya está ocupado
+        if next_pos in occupied:
+            return (x, y, self.velocity, False)
 
         # ¿Semáforo permite avanzar recto?
         axis = self.axis()
-        can_move = (self.lane == self.model.current_phase[0])
+        can_move = (
+            (axis == 'NS' and self.model.current_phase.startswith('NS')) or
+            (axis == 'EW' and self.model.current_phase.startswith('EW'))
+        )
 
         # ¿Está en celda de giro?
         will_turn = False
@@ -56,9 +64,11 @@ class VehicleAgent(ap.Agent):
                     self.velocity = np.array([0, 1])
                 vx, vy = self.velocity
                 nx, ny = x + vx, y + vy
+                next_pos = (nx, ny)
                 will_turn = True
 
         return (nx, ny, self.velocity, (can_move or will_turn))
+
 
 # -----------------------------
 # Grid de ciudad
@@ -73,6 +83,7 @@ class City(ap.Grid):
             "EW_left_up":     (half+3, half+1),
         }
 
+
 # -----------------------------
 # Modelo de tráfico
 # -----------------------------
@@ -81,18 +92,10 @@ class TrafficModel(ap.Model):
         self.size = self.p.size
         self.spawn_prob = self.p.spawn_prob
         self.turn_prob = self.p.turn_prob
-        self.cycle_length = self.p.cycle_length
+        self.min_green = self.p.min_green
+        self.max_green = self.p.max_green
+        self.yellow_length = self.p.yellow_length
         self.half = self.size // 2
-        self.yellow_length = self.p.get("yellow_length", 2)
-        self.current_phase = 'N_GREEN'
-
-        self.metrics = {
-            "step": [],
-            "cars_in_system": [],
-            "cars_removed": [],
-            "avg_wait_time": [],
-            "total_wait_time": []
-        }
 
         self.city = City(self, shape=(self.size, self.size))
 
@@ -103,6 +106,16 @@ class TrafficModel(ap.Model):
         # Lista de autos
         self.removed_count = 0
         self.cars = ap.AgentList(self, 0, VehicleAgent)
+
+        # Métricas
+        self.metrics = {
+            "step": [],
+            "cars_in_system": [],
+            "cars_removed": [],
+            "avg_wait_time": [],
+            "total_wait_time": []
+        }
+        self.t = 0
 
     def spawn_vehicle(self):
         half = self.half
@@ -129,37 +142,37 @@ class TrafficModel(ap.Model):
         new_car.pos = 0
 
     def update_lights(self):
-
         self.cycle_timer += 1
-        phase_duration = self.cycle_length
-        yellow_duration = max(2, self.cycle_length // 3)
 
         if self.current_phase == 'NS_GREEN':
-            if self.cycle_timer >= phase_duration:
-                self.current_phase = 'NS_YELLOW'
-                self.cycle_timer = 0
+            if self.cycle_timer >= self.min_green:
+                cars_ns = sum(1 for car in self.city.agents if car.axis() == 'NS')
+                cars_ew = sum(1 for car in self.city.agents if car.axis() == 'EW')
+                if cars_ew > cars_ns or self.cycle_timer >= self.max_green:
+                    self.current_phase = 'NS_YELLOW'
+                    self.cycle_timer = 0
 
         elif self.current_phase == 'NS_YELLOW':
-            if self.cycle_timer >= yellow_duration:   # duración corta para amarillo
+            if self.cycle_timer >= self.yellow_length:
                 self.current_phase = 'EW_GREEN'
                 self.cycle_timer = 0
 
         elif self.current_phase == 'EW_GREEN':
-            if self.cycle_timer >= phase_duration:
-                self.current_phase = 'EW_YELLOW'
-                self.cycle_timer = 0
+            if self.cycle_timer >= self.min_green:
+                cars_ns = sum(1 for car in self.city.agents if car.axis() == 'NS')
+                cars_ew = sum(1 for car in self.city.agents if car.axis() == 'EW')
+                if cars_ns > cars_ew or self.cycle_timer >= self.max_green:
+                    self.current_phase = 'EW_YELLOW'
+                    self.cycle_timer = 0
 
         elif self.current_phase == 'EW_YELLOW':
-            if self.cycle_timer >= yellow_duration:
+            if self.cycle_timer >= self.yellow_length:
                 self.current_phase = 'NS_GREEN'
                 self.cycle_timer = 0
-                
 
     def step(self):
-        # Actualizar semáforo
         self.update_lights()
 
-        # Spawn de autos
         if random.random() < self.spawn_prob:
             self.spawn_vehicle()
 
@@ -167,10 +180,9 @@ class TrafficModel(ap.Model):
         proposals = {}
         to_remove = []
 
-        # Propuestas de movimiento
         for car in list(self.city.agents):
             x, y = self.city.positions[car]
-            nx, ny, new_vel, wants = car.propose_move()
+            nx, ny, new_vel, wants = car.propose_move(occupied)
 
             if nx <= 0 or nx >= self.size-1 or ny <= 0 or ny >= self.size-1:
                 to_remove.append(car)
@@ -180,41 +192,28 @@ class TrafficModel(ap.Model):
 
         winners = {}
         for cell, lst in proposals.items():
-            # Si ya hay alguien en esa celda (ocupied), no se permite que entren
-            if cell in occupied:
-                # Solo el que ya estaba puede quedarse
-                for (car, new_vel, wants) in lst:
-                    x, y = self.city.positions[car]
-                    if (x, y) == cell:   # mismo lugar que antes
-                        winners[car] = (cell[0], cell[1], new_vel)
-                continue
-
-    # Si la celda está libre, elegir ganador entre los que quieren moverse
             movers = [(car, new_vel) for (car, new_vel, wants) in lst if wants]
             if movers:
                 car_win, v_win = random.choice(movers)
                 winners[car_win] = (cell[0], cell[1], v_win)
 
-
         moved = set()
         for car, (nx, ny, new_vel) in winners.items():
             self.city.move_to(car, (nx, ny))
             car.velocity = new_vel
-            car.pos += 1  
+            car.pos += 1
             moved.add(car)
 
-        # Autos que no se movieron → esperar
         for car in self.city.agents:
             if car not in moved:
                 car.wait_time += 1
 
-        # Eliminar autos fuera del grid
-        if to_remove:
-            self.city.remove_agents(to_remove)
-            self.removed_count += len(to_remove)
+        safe_remove = [car for car in to_remove if car in self.city.positions]
+        if safe_remove:
+            self.city.remove_agents(safe_remove)
+            self.removed_count += len(safe_remove)
 
-        #registro de las metricas
-        removed_cars = len(to_remove)
+        removed_cars = len(safe_remove)
         total_wait = sum(car.wait_time for car in self.city.agents)
         avg_wait = total_wait / len(self.city.agents) if self.city.agents else 0
 
@@ -251,13 +250,21 @@ class TrafficModel(ap.Model):
             })
 
         return {"lights": lights, "cars": cars_data}
-        
+
 
 # -----------------------------
 # Servidor TCP
 # -----------------------------
 def run_server():
-    params = {"steps": 80, "size": 21, "spawn_prob": 0.3, "cycle_length": 5, "yellow_length": 2, "turn_prob": 0.3}
+    params = {
+        "steps": 80,
+        "size": 21,
+        "spawn_prob": 0.4,
+        "turn_prob": 0.3,
+        "min_green": 4,
+        "max_green": 10,
+        "yellow_length": 2
+    }
     model = TrafficModel(params)
     model.setup()
 
@@ -280,29 +287,32 @@ def run_server():
     conn.close()
     return model
 
+
+# -----------------------------
+# Main + Gráficas
+# -----------------------------
 if __name__ == "__main__":
     model = run_server()
 
-#grafica de las metricas despues de la simulacion
-plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(12, 8))
 
-plt.subplot(2,2,1)
-plt.plot(model.metrics["step"], model.metrics["cars_in_system"], label="Autos en sistema")
-plt.xlabel("Step")
-plt.ylabel("Cantidad de autos")
-plt.legend()
+    plt.subplot(2,2,1)
+    plt.plot(model.metrics["step"], model.metrics["cars_in_system"], label="Autos en sistema")
+    plt.xlabel("Step")
+    plt.ylabel("Cantidad de autos")
+    plt.legend()
 
-plt.subplot(2,2,3)
-plt.plot(model.metrics["step"], model.metrics["avg_wait_time"], label="Tiempo de espera promedio", color='green')
-plt.xlabel("Step")
-plt.ylabel("Tiempo de espera")
-plt.legend()
+    plt.subplot(2,2,3)
+    plt.plot(model.metrics["step"], model.metrics["avg_wait_time"], label="Tiempo de espera promedio", color='green')
+    plt.xlabel("Step")
+    plt.ylabel("Tiempo de espera")
+    plt.legend()
 
-plt.subplot(2,2,4)
-plt.plot(model.metrics["step"], model.metrics["total_wait_time"], label="Tiempo de espera total", color='red')
-plt.xlabel("Step")
-plt.ylabel("Tiempo de espera")
-plt.legend()
+    plt.subplot(2,2,4)
+    plt.plot(model.metrics["step"], model.metrics["total_wait_time"], label="Tiempo de espera total", color='red')
+    plt.xlabel("Step")
+    plt.ylabel("Tiempo de espera")
+    plt.legend()
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
