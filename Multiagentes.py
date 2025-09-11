@@ -257,12 +257,12 @@ class TrafficModel(ap.Model):
 # -----------------------------
 def run_server():
     params = {
-        "steps": 80,
+        "steps": 100,
         "size": 21,
         "spawn_prob": 0.4,
         "turn_prob": 0.3,
-        "min_green": 4,
-        "max_green": 10,
+        "min_green": 5,
+        "max_green": 115,
         "yellow_length": 2
     }
     model = TrafficModel(params)
